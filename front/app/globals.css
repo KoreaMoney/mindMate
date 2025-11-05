@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    /* 밝은 배경 */
+    --background: 0 0% 100%;
+    --foreground: 210 10% 12%;
+    --card: 210 20% 98%;
+    --card-foreground: 210 10% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 10% 12%;
+    
+    /* 주 색상: 편안한 파란색 */
+    --primary: 200 84% 50%;
+    --primary-foreground: 0 0% 100%;
+    
+    /* 보조 색상: 편안한 초록색 */
+    --secondary: 142 72% 48%;
+    --secondary-foreground: 0 0% 100%;
+    
+    /* 강조: 따뜻한 노란색 */
+    --accent: 44 96% 56%;
+    --accent-foreground: 210 10% 12%;
+    
+    /* 부드러운 회색 */
+    --muted: 210 14% 89%;
+    --muted-foreground: 210 8% 40%;
+    
+    /* 위험 색: 부드러운 빨간색 */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 210 20% 92%;
+    --input: 210 20% 92%;
+    --ring: 200 84% 50%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 210 13% 13%;
+    --foreground: 210 14% 89%;
+    --card: 210 11% 18%;
+    --card-foreground: 210 14% 89%;
+    --popover: 210 11% 18%;
+    --popover-foreground: 210 14% 89%;
+    --primary: 200 100% 60%;
+    --primary-foreground: 210 11% 18%;
+    --secondary: 142 80% 58%;
+    --secondary-foreground: 210 11% 18%;
+    --muted: 210 11% 25%;
+    --muted-foreground: 210 8% 65%;
+    --accent: 44 96% 66%;
+    --accent-foreground: 210 11% 18%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 11% 18%;
+    --border: 210 11% 25%;
+    --input: 210 11% 25%;
+    --ring: 200 100% 60%;
+  }
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-geist-sans), system-ui, sans-serif;
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "mindmate": "agents.mindmate_graph:graph"
+  },
+  "env": ".env"
+}
+
