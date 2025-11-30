@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Phone, AlertTriangle, X, Plus, Star, Trash2 } from "lucide-react";
+import { Phone, AlertTriangle, X, Plus, Star, Trash2, Mail, CheckCircle2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
+import { type OnboardingData } from "../lib/api";
+import emailjs from "@emailjs/browser";
 
 interface EmergencyNumber {
   name: string;
@@ -60,6 +63,8 @@ interface EmergencyCallDialogProps {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   riskLevel?: "medium" | "high" | "critical" | null;
+  userId?: string;
+  onboardingData?: OnboardingData | null;
 }
 
 interface SavedContact {
@@ -68,8 +73,33 @@ interface SavedContact {
   isPrimary?: boolean;
 }
 
-const EmergencyCallDialog = ({ isOpen, onOpenChange, riskLevel }: EmergencyCallDialogProps) => {
+interface SavedEmail {
+  name: string;
+  email: string;
+  isPrimary?: boolean;
+}
+
+const EmergencyCallDialog = ({ isOpen, onOpenChange, riskLevel, userId, onboardingData }: EmergencyCallDialogProps) => {
   const [selectedNumber, setSelectedNumber] = useState<string | null>(null);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [showSuccessAlert, setShowSuccessAlert] = useState(false);
+  const [savedEmails, setSavedEmails] = useState<SavedEmail[]>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("emergency_emails");
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch {
+          return [];
+        }
+      }
+    }
+    return [];
+  });
+  const [isAddingEmail, setIsAddingEmail] = useState(false);
+  const [newEmailName, setNewEmailName] = useState("");
+  const [newEmailAddress, setNewEmailAddress] = useState("");
+  const [selectedEmailForSend, setSelectedEmailForSend] = useState<SavedEmail | null>(null);
   const [savedContacts, setSavedContacts] = useState<SavedContact[]>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("emergency_contacts");
@@ -147,6 +177,202 @@ const EmergencyCallDialog = ({ isOpen, onOpenChange, riskLevel }: EmergencyCallD
     onOpenChange(false);
   };
 
+  const primaryContacts = savedContacts.filter((c) => c.isPrimary);
+
+  // localStorage에서 이메일 목록 읽어오기
+  const loadEmails = () => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("emergency_emails");
+      if (saved) {
+        try {
+          const emails = JSON.parse(saved);
+          setSavedEmails(emails);
+        } catch {
+          setSavedEmails([]);
+        }
+      } else {
+        setSavedEmails([]);
+      }
+    }
+  };
+
+  // localStorage에 이메일 저장
+  const saveEmails = (emails: SavedEmail[]) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("emergency_emails", JSON.stringify(emails));
+      setSavedEmails(emails);
+      window.dispatchEvent(new Event("emailsUpdated"));
+    }
+  };
+
+  // 다이얼로그가 열릴 때 최신 데이터 로드
+  useEffect(() => {
+    if (isOpen) {
+      loadEmails();
+      // 알림 상태 초기화
+      setShowSuccessAlert(false);
+      // 온보딩 이메일도 포함하여 기본 선택
+      const currentEmails = savedEmails;
+      if (onboardingData?.guardianEmail && currentEmails.length === 0) {
+        const defaultEmail: SavedEmail = {
+          name: onboardingData.guardianName || "보호자",
+          email: onboardingData.guardianEmail,
+          isPrimary: true,
+        };
+        setSavedEmails([defaultEmail]);
+        setSelectedEmailForSend(defaultEmail);
+      } else if (currentEmails.length > 0 && !selectedEmailForSend) {
+        const primaryEmail = currentEmails.find((e) => e.isPrimary) || currentEmails[0];
+        setSelectedEmailForSend(primaryEmail);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  // 사용 가능한 이메일 목록 (온보딩 이메일 + 등록된 이메일)
+  const availableEmails = (() => {
+    const emails: SavedEmail[] = [];
+
+    // 온보딩에서 등록한 이메일 추가
+    if (onboardingData?.guardianEmail) {
+      emails.push({
+        name: onboardingData.guardianName || "보호자",
+        email: onboardingData.guardianEmail,
+        isPrimary: true,
+      });
+    }
+
+    // 등록된 이메일 추가 (중복 제거)
+    savedEmails.forEach((email) => {
+      if (!emails.some((e) => e.email === email.email)) {
+        emails.push(email);
+      }
+    });
+
+    return emails;
+  })();
+
+  const handleAddEmail = () => {
+    if (!newEmailName.trim() || !newEmailAddress.trim()) {
+      alert("이름과 이메일을 모두 입력해주세요.");
+      return;
+    }
+
+    // 이메일 형식 검증
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmailAddress.trim())) {
+      alert("올바른 이메일 주소를 입력해주세요.");
+      return;
+    }
+
+    const newEmail: SavedEmail = {
+      name: newEmailName.trim(),
+      email: newEmailAddress.trim(),
+      isPrimary: savedEmails.length === 0, // 첫 번째 이메일은 기본으로 설정
+    };
+
+    const updatedEmails = [...savedEmails, newEmail];
+    saveEmails(updatedEmails);
+
+    setNewEmailName("");
+    setNewEmailAddress("");
+    setIsAddingEmail(false);
+
+    // 새로 추가한 이메일 선택
+    setSelectedEmailForSend(newEmail);
+  };
+
+  const handleSetPrimaryEmail = (index: number) => {
+    const updatedEmails = savedEmails.map((email, i) => ({
+      ...email,
+      isPrimary: i === index,
+    }));
+    saveEmails(updatedEmails);
+    setSelectedEmailForSend(updatedEmails[index]);
+  };
+
+  const handleDeleteEmail = (index: number) => {
+    if (confirm("이 이메일을 삭제하시겠습니까?")) {
+      const updatedEmails = savedEmails.filter((_, i) => i !== index);
+      if (updatedEmails.length > 0 && !updatedEmails.some((e) => e.isPrimary)) {
+        updatedEmails[0].isPrimary = true;
+      }
+      saveEmails(updatedEmails);
+      if (selectedEmailForSend === savedEmails[index]) {
+        setSelectedEmailForSend(updatedEmails[0] || null);
+      }
+    }
+  };
+
+  const handleSendEmailToGuardian = async () => {
+    const emailToSend =
+      selectedEmailForSend ||
+      (onboardingData?.guardianEmail
+        ? {
+            name: onboardingData.guardianName || "보호자",
+            email: onboardingData.guardianEmail,
+          }
+        : null);
+
+    if (!emailToSend) {
+      alert("이메일을 선택하거나 등록해주세요.");
+      return;
+    }
+
+    setIsSendingEmail(true);
+
+    try {
+      const riskMessage =
+        riskLevel === "critical"
+          ? "🚨 긴급 상황이 감지되었습니다!"
+          : riskLevel === "high"
+          ? "⚠️ 주의가 필요한 상황이 감지되었습니다"
+          : "위험 신호가 감지되었습니다";
+
+      const userName = onboardingData?.name || "사용자";
+      const status = riskLevel === "critical" ? "긴급" : riskLevel === "high" ? "주의" : "일반";
+
+      // EmailJS 환경 변수
+      const EMAILJS_SERVICE_ID = process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID || "";
+      const EMAILJS_TEMPLATE_ID = process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID || "";
+      const EMAILJS_PUBLIC_KEY = process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY || "";
+
+      if (!EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID || !EMAILJS_PUBLIC_KEY) {
+        alert("⚠️ EmailJS 설정이 완료되지 않았습니다. 환경 변수를 확인해주세요.");
+        setIsSendingEmail(false);
+        return;
+      }
+
+      // EmailJS로 이메일 전송
+      // EmailJS 템플릿에서 {{to_email}} 변수를 사용하려면 Email Service 설정의 "To Email" 필드에 {{to_email}}을 입력해야 합니다
+      const templateParams = {
+        to_name: emailToSend.name,
+        to_email: emailToSend.email, // Email Service 설정의 "To Email" 필드에 {{to_email}} 입력 필요
+        user_name: userName,
+        risk_message: riskMessage,
+        risk_level: status,
+        subject: `[MindMate 응급 알림] ${userName}님에게 위험 신호 감지`,
+        message: `${userName}님에게 ${riskMessage}\n\n즉시 확인이 필요합니다.\n\n상태: ${status}\n\n${userName}님의 상태를 확인해주시기 바랍니다.`,
+      };
+
+      await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, templateParams, EMAILJS_PUBLIC_KEY);
+
+      // 전송 성공 알림 표시
+      setShowSuccessAlert(true);
+    } catch (error: unknown) {
+      console.error("이메일 전송 오류:", error);
+      const errorMessage =
+        error && typeof error === "object" && "text" in error && typeof error.text === "string"
+          ? error.text
+          : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+          ? error.message
+          : "알 수 없는 오류";
+      alert(`⚠️ 이메일 전송에 실패했습니다: ${errorMessage}`);
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
+
   const handleAddContact = () => {
     if (!newContactName.trim() || !newContactNumber.trim()) {
       alert("이름과 전화번호를 모두 입력해주세요.");
@@ -193,8 +419,6 @@ const EmergencyCallDialog = ({ isOpen, onOpenChange, riskLevel }: EmergencyCallD
     }
   };
 
-  const primaryContacts = savedContacts.filter((c) => c.isPrimary);
-
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] border-2 border-red-300 shadow-2xl flex flex-col mx-auto my-4">
@@ -221,6 +445,195 @@ const EmergencyCallDialog = ({ isOpen, onOpenChange, riskLevel }: EmergencyCallD
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto min-h-0 px-1">
+          {/* 전송 성공 알림 */}
+          {showSuccessAlert && (
+            <Alert className="mb-4 border-green-500 bg-green-50">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <AlertTitle className="text-green-900 font-bold">
+                ⚠️ 알림 조건 충족! 보호자에게 알림이 전송되었습니다.
+              </AlertTitle>
+              <AlertDescription className="text-green-800">
+                보호자에게 위험 상황이 성공적으로 전달되었습니다.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* 응급 이메일 등록 및 전송 */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <Label className="text-base sm:text-lg font-bold flex items-center gap-2">
+                <Mail className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600" />
+                응급 이메일 알림
+              </Label>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsAddingEmail(true)}
+                tabIndex={0}
+                aria-label="이메일 추가"
+                className="text-xs sm:text-sm"
+              >
+                <Plus className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
+                추가
+              </Button>
+            </div>
+
+            {/* 이메일 추가 폼 */}
+            {isAddingEmail && (
+              <div className="mb-3 p-3 bg-blue-50 border-2 border-blue-300 rounded-lg">
+                <div className="space-y-2">
+                  <Input
+                    placeholder="이름"
+                    value={newEmailName}
+                    onChange={(e) => setNewEmailName(e.target.value)}
+                    className="text-sm"
+                    tabIndex={0}
+                  />
+                  <Input
+                    type="email"
+                    placeholder="이메일 주소"
+                    value={newEmailAddress}
+                    onChange={(e) => setNewEmailAddress(e.target.value)}
+                    className="text-sm"
+                    tabIndex={0}
+                  />
+                  <div className="flex gap-2">
+                    <Button onClick={handleAddEmail} size="sm" className="flex-1" tabIndex={0}>
+                      추가
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setIsAddingEmail(false);
+                        setNewEmailName("");
+                        setNewEmailAddress("");
+                      }}
+                      variant="outline"
+                      size="sm"
+                      tabIndex={0}
+                    >
+                      취소
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 등록된 이메일 목록 */}
+            {availableEmails.length > 0 && (
+              <div className="mb-3 space-y-2">
+                {availableEmails.map((email, index) => (
+                  <div
+                    key={index}
+                    className={`flex items-center justify-between p-2 sm:p-3 rounded-lg border-2 ${
+                      email.isPrimary ? "bg-yellow-50 border-yellow-400" : "bg-gray-50 border-gray-200"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+                      {email.isPrimary && (
+                        <Star className="h-4 w-4 sm:h-5 sm:w-5 text-yellow-600 fill-yellow-600 shrink-0" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm sm:text-lg truncate">{email.name}</p>
+                        <p className="text-xs sm:text-sm text-muted-foreground truncate">{email.email}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                      {!email.isPrimary && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            const emailIndex = savedEmails.findIndex((e) => e.email === email.email);
+                            if (emailIndex !== -1) {
+                              handleSetPrimaryEmail(emailIndex);
+                            }
+                          }}
+                          className="text-xs"
+                          tabIndex={0}
+                          aria-label="우선 이메일로 설정"
+                        >
+                          <Star className="h-3 w-3 sm:h-4 sm:w-4" />
+                        </Button>
+                      )}
+                      {savedEmails.some((e) => e.email === email.email) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            const emailIndex = savedEmails.findIndex((e) => e.email === email.email);
+                            if (emailIndex !== -1) {
+                              handleDeleteEmail(emailIndex);
+                            }
+                          }}
+                          className="text-red-600 hover:text-red-700 text-xs"
+                          tabIndex={0}
+                          aria-label="이메일 삭제"
+                        >
+                          <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 이메일 선택 및 전송 */}
+            {availableEmails.length > 0 && (
+              <>
+                {availableEmails.length > 1 && (
+                  <div className="mb-3">
+                    <Label className="text-sm font-medium mb-2 block">이메일 선택</Label>
+                    <select
+                      value={selectedEmailForSend?.email || ""}
+                      onChange={(e) => {
+                        const selected = availableEmails.find((email) => email.email === e.target.value);
+                        setSelectedEmailForSend(selected || null);
+                      }}
+                      className="w-full p-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-sm sm:text-base"
+                      tabIndex={0}
+                    >
+                      {availableEmails.map((email, index) => (
+                        <option key={index} value={email.email}>
+                          {email.name} ({email.email})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <Button
+                  onClick={handleSendEmailToGuardian}
+                  disabled={isSendingEmail || !selectedEmailForSend}
+                  className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-bold text-base sm:text-lg py-4 sm:py-6 h-auto shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  tabIndex={0}
+                  aria-label="이메일 전송"
+                >
+                  <Mail className="h-4 w-4 sm:h-5 sm:w-5 mr-2 sm:mr-3" />
+                  <span className="truncate">
+                    {isSendingEmail
+                      ? "전송 중..."
+                      : selectedEmailForSend
+                      ? `${selectedEmailForSend.name}님에게 이메일 전송`
+                      : "이메일을 선택해주세요"}
+                  </span>
+                </Button>
+                {selectedEmailForSend && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {selectedEmailForSend.name}({selectedEmailForSend.email})에게 위험 상황을 알립니다.
+                  </p>
+                )}
+              </>
+            )}
+
+            {availableEmails.length === 0 && (
+              <div className="p-4 bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg text-center">
+                <p className="text-sm text-muted-foreground mb-2">등록된 이메일이 없습니다.</p>
+                <p className="text-xs text-muted-foreground">위 버튼을 눌러 이메일을 추가하세요.</p>
+              </div>
+            )}
+          </div>
+
           {/* 우선 연락처 목록 */}
           {primaryContacts.length > 0 && (
             <div className="mb-4">

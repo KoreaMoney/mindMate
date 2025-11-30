@@ -137,9 +137,22 @@ export default function Home() {
                 <p className="text-xs text-muted-foreground">AI 기반 개인 맞춤형 우울증 관리</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Shield className="w-5 h-5 text-green-600" />
-              <span className="text-xs text-muted-foreground">안전하게 보호됩니다</span>
+            <div className="flex items-center gap-3">
+              {!onboardingData && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsOnboardingOpen(true)}
+                  className="text-xs"
+                  tabIndex={0}
+                >
+                  정보 등록
+                </Button>
+              )}
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-green-600" />
+                <span className="text-xs text-muted-foreground">안전하게 보호됩니다</span>
+              </div>
             </div>
           </div>
         </div>
@@ -287,7 +300,7 @@ export default function Home() {
 
           <TabsContent value="mood" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <MoodTracker userId={userId} />
+              <MoodTracker userId={userId} onboardingData={onboardingData} />
               <Card className="bg-linear-to-br from-green-50 to-emerald-50 border-green-200">
                 <CardHeader>
                   <CardTitle>감정 추적의 중요성</CardTitle>
@@ -429,6 +442,8 @@ export default function Home() {
           }
         }}
         riskLevel={emergencyRiskLevel}
+        userId={userId}
+        onboardingData={onboardingData}
       />
     </div>
   );

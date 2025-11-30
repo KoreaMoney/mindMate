@@ -20,7 +20,6 @@ const apiClient = axios.create({
 // 요청 인터셉터 - 디버깅용
 apiClient.interceptors.request.use(
   (config) => {
-    console.log(`[API] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
     return config;
   },
   (error) => {
@@ -33,23 +32,65 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.code === "ERR_NETWORK" || error.message?.includes("Network Error")) {
+    // 네트워크 에러 처리 (서버에 도달하지 못한 경우)
+    if (
+      error.code === "ERR_NETWORK" ||
+      error.code === "ECONNREFUSED" ||
+      error.code === "ETIMEDOUT" ||
+      error.message?.includes("Network Error") ||
+      error.message?.includes("timeout")
+    ) {
       // 에러 객체에 더 친화적인 메시지 추가
-      const userFriendlyMessage = 
+      const userFriendlyMessage =
         `FastAPI 서버에 연결할 수 없습니다.\n` +
-        `URL: ${API_BASE_URL}\n\n` +
+        `서버 URL: ${API_BASE_URL}\n\n` +
         `해결 방법:\n` +
         `1. 터미널을 열고 다음 명령어를 실행하세요:\n` +
-        `   cd agent && uv run python main.py\n` +
-        `2. 서버가 실행 중인지 확인하세요.\n` +
-        `3. 브라우저를 새로고침해보세요.`;
-      
+        `   cd agent\n` +
+        `   uv run python main.py\n\n` +
+        `2. 서버가 실행 중인지 확인하세요:\n` +
+        `   브라우저에서 ${API_BASE_URL}/health 접속 시도\n\n` +
+        `3. 포트가 이미 사용 중인지 확인하세요:\n` +
+        `   lsof -i :8000\n\n` +
+        `4. 브라우저를 새로고침해보세요.`;
+
       error.userMessage = userFriendlyMessage;
-      console.error(`[API Network Error] ${userFriendlyMessage}`);
+      // 개발 환경에서만 상세한 에러 로그 출력
+      if (process.env.NODE_ENV === "development") {
+        console.error(`[API Network Error] 서버 연결 실패`);
+        console.error(`  - 서버 URL: ${API_BASE_URL}`);
+        console.error(`  - 에러 코드: ${error.code}`);
+        console.error(`  - 에러 메시지: ${error.message}`);
+        console.error(`  - 전체 에러:`, error);
+      }
+      // 에러 코드도 추가하여 쉽게 식별 가능하도록
+      error.isNetworkError = true;
     } else if (error.response) {
       // 서버 응답이 있는 경우 (4xx, 5xx)
-      error.userMessage = `서버 오류가 발생했습니다: ${error.response.status} ${error.response.statusText}`;
-      console.error(`[API Error] ${error.response.status}:`, error.response.data);
+      const status = error.response.status;
+      const statusText = error.response.statusText;
+      const errorData = error.response.data;
+
+      error.userMessage = `서버 오류가 발생했습니다: ${status} ${statusText}`;
+
+      // 개발 환경에서만 상세한 에러 로그 출력
+      if (process.env.NODE_ENV === "development") {
+        console.error(`[API Error] ${status} ${statusText}:`, errorData);
+        console.error(`[API Error] 요청 URL: ${error.config?.url}`);
+        console.error(`[API Error] 요청 메서드: ${error.config?.method}`);
+        console.error(`[API Error] 요청 데이터:`, error.config?.data);
+      }
+    } else if (error.code === "ECONNABORTED") {
+      // 타임아웃 에러
+      error.userMessage =
+        `요청 시간이 초과되었습니다 (10초).\n` +
+        `서버 응답이 느리거나 서버에 문제가 있을 수 있습니다.\n\n` +
+        `서버가 정상적으로 실행 중인지 확인해주세요.`;
+      error.isNetworkError = true;
+
+      if (process.env.NODE_ENV === "development") {
+        console.warn(`[API Timeout] 요청 시간 초과: ${error.config?.url}`);
+      }
     } else {
       // 기타 에러
       error.userMessage = error.message || "알 수 없는 오류가 발생했습니다.";
@@ -104,6 +145,7 @@ export interface OnboardingData {
   address: string;
   guardianName?: string;
   guardianPhone: string; // 보호자 없으면 "112"
+  guardianEmail?: string; // 보호자 이메일
   latitude?: number;
   longitude?: number;
 }
@@ -133,10 +175,25 @@ export const analyzeSentiment = async (message: string): Promise<SentimentAnalys
 };
 
 /**
+ * 감정 로그 저장 응답 타입
+ */
+export interface MoodLogResponse {
+  message: string;
+  mood_log?: {
+    user_id: string;
+    mood_score: number;
+    notes?: string;
+    timestamp?: string;
+  };
+  dangerous_words_detected?: Record<string, number>;
+  total_dangerous_count?: number;
+}
+
+/**
  * 감정 로그 저장
  */
-export const logMood = async (mood: MoodLog): Promise<{ message: string }> => {
-  const response = await apiClient.post("/api/mood/log", mood);
+export const logMood = async (mood: MoodLog): Promise<MoodLogResponse> => {
+  const response = await apiClient.post<MoodLogResponse>("/api/mood/log", mood);
   return response.data;
 };
 
@@ -212,5 +269,71 @@ export const getOnboardingData = async (userId: string): Promise<OnboardingData 
  */
 export const healthCheck = async () => {
   const response = await apiClient.get("/health");
+  return response.data;
+};
+
+/**
+ * 이메일 테스트
+ */
+export const testEmailMessage = async (email: string, subject?: string, message?: string) => {
+  const response = await apiClient.post("/api/test/email", {
+    email,
+    subject,
+    message,
+  });
+  return response.data;
+};
+
+/**
+ * 위험 단어 카운트 조회 응답 타입
+ */
+export interface DangerousWordsInfo {
+  user_id: string;
+  dangerous_words: Record<string, number>;
+  total_count: number;
+  max_repeat_count: number;
+  should_alert: boolean;
+}
+
+/**
+ * 위험 단어 카운트 조회
+ */
+export const getDangerousWordsCount = async (userId: string): Promise<DangerousWordsInfo> => {
+  const response = await apiClient.get<DangerousWordsInfo>("/api/mood/dangerous-words", {
+    params: { user_id: userId },
+  });
+  return response.data;
+};
+
+/**
+ * 위험 단어 카운트 리셋 (테스트용)
+ */
+export const resetDangerousWords = async (userId: string) => {
+  const response = await apiClient.post("/api/mood/dangerous-words/reset", null, {
+    params: { user_id: userId },
+  });
+  return response.data;
+};
+
+/**
+ * 오늘 감정 기반 유튜브 노래 추천
+ */
+export interface MusicRecommendation {
+  success: boolean;
+  mood_score: number;
+  mood_state: string;
+  sentiment: string;
+  recommendation: string;
+  timestamp: string;
+}
+
+export const recommendMusic = async (
+  userId: string,
+  conversationHistory?: ChatMessage[]
+): Promise<MusicRecommendation> => {
+  const response = await apiClient.post<MusicRecommendation>("/api/music/recommend", {
+    user_id: userId,
+    conversation_history: conversationHistory,
+  });
   return response.data;
 };

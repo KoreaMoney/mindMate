@@ -39,6 +39,7 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
   const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const shouldSpeakGreetingRef = useRef(false);
   const voicesLoadedRef = useRef(false);
+  const lastSpokenMessageIndexRef = useRef(-1);
 
   // TTS 음성 목록 로드
   useEffect(() => {
@@ -48,11 +49,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
         if (voices.length > 0) {
           voicesRef.current = voices;
           voicesLoadedRef.current = true;
-          console.log("🔊 Available voices:", voices.length);
-          console.log(
-            "🇰🇷 Korean voices:",
-            voices.filter((v) => v.lang.includes("ko") || v.lang.includes("KR"))
-          );
         }
       }
     };
@@ -143,11 +139,37 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
       shouldSpeakGreetingRef.current = false;
       const timer = setTimeout(() => {
         handleSpeak(messages[0].content);
+        lastSpokenMessageIndexRef.current = 0;
       }, 500);
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
+
+  // 새로운 assistant 메시지가 완성되면 자동으로 TTS 재생
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    // 마지막 메시지가 assistant 메시지이고, 아직 TTS를 재생하지 않은 경우
+    const lastMessage = messages[messages.length - 1];
+    const lastMessageIndex = messages.length - 1;
+
+    if (lastMessage && lastMessage.role === "assistant" && lastMessageIndex > lastSpokenMessageIndexRef.current) {
+      // 로딩 중이 아닐 때만 TTS 재생 (응답이 완전히 완성된 경우)
+      // isLoading이 false가 될 때까지 약간 대기 (다음 렌더 사이클에서 재확인)
+      if (!isLoading) {
+        lastSpokenMessageIndexRef.current = lastMessageIndex;
+
+        // 짧은 지연 후 자동으로 TTS 재생 (텍스트가 완전히 렌더링된 후)
+        const timer = setTimeout(() => {
+          handleSpeak(lastMessage.content);
+        }, 300);
+
+        return () => clearTimeout(timer);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, isLoading]);
 
   // 음성 입력 시작/중지
   const handleVoiceInput = () => {
@@ -171,7 +193,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
         window.speechSynthesis.cancel();
         setIsSpeaking(false);
         currentUtteranceRef.current = null;
-        console.log("🛑 Speech stopped");
         // cancel 후 완전히 정리될 때까지 대기
         setTimeout(() => resolve(), 100);
       } else {
@@ -183,7 +204,7 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
   // 이모지 및 특수 문자 제거
   const cleanTextForTTS = (text: string): string => {
     // 이모지 및 특수 문자 제거 (더 포괄적인 패턴)
-    const cleaned = text
+    let cleaned = text
       // 이모지 범위 제거
       .replace(/[\u{1F300}-\u{1F9FF}]/gu, "") // 기본 이모지
       .replace(/[\u{2600}-\u{26FF}]/gu, "") // 기타 기호
@@ -202,8 +223,11 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
       .replace(/\s+/g, " ")
       .trim();
 
+    // 영어 단어/브랜드명을 한글 발음으로 변환 (대소문자 구분 없음)
+    cleaned = cleaned.replace(/mindmate/gi, "마인드 메이트");
+
     if (text !== cleaned) {
-      console.log(`🧹 Cleaned text: "${text.substring(0, 30)}..." → "${cleaned.substring(0, 30)}..."`);
+      // Text cleaned
     }
 
     return cleaned;
@@ -269,14 +293,11 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
         return;
       }
 
-      console.log("🔊 Starting TTS for text:", cleanedText.substring(0, 50) + "...");
-
       // 기존 음성이 재생 중이면 완전히 중단될 때까지 대기
       await stopSpeaking();
 
       // 음성 목록이 로드될 때까지 대기
       const voices = await waitForVoices();
-      console.log("🎤 Total voices available:", voices.length);
 
       if (voices.length === 0) {
         console.warn("⚠️ No voices available, retrying...");
@@ -300,14 +321,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
       utterance.pitch = 1.0;
       utterance.volume = 1.0; // 최대 볼륨으로 설정
 
-      // 볼륨 확인 및 로그
-      console.log("🔊 Utterance settings:", {
-        volume: utterance.volume,
-        rate: utterance.rate,
-        pitch: utterance.pitch,
-        lang: utterance.lang,
-      });
-
       if (utterance.volume === 0) {
         console.error("❌ ERROR: Utterance volume is 0!");
       }
@@ -325,9 +338,7 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
 
       if (koreanVoice) {
         utterance.voice = koreanVoice;
-        console.log(`✅ Using voice: ${koreanVoice.name} (${koreanVoice.lang})`);
       } else {
-        console.log("⚠️ No Korean voice found, using default voice");
         // 한국어 음성이 없어도 기본 음성으로 재생
         if (availableVoices.length > 0) {
           utterance.voice = availableVoices[0];
@@ -343,20 +354,10 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
           startTimeout = null;
         }
         setIsSpeaking(true);
-        console.log("✅ Speech started successfully (onstart event fired)");
-        console.log("🔊 Current utterance:", {
-          text: utterance.text.substring(0, 30),
-          lang: utterance.lang,
-          voice: utterance.voice?.name,
-          volume: utterance.volume,
-          rate: utterance.rate,
-          pitch: utterance.pitch,
-        });
 
         // 실제로 재생되고 있는지 확인
         const checkAfterStart = setInterval(() => {
           if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
-            console.warn("⚠️ Speech stopped unexpectedly after onstart");
             clearInterval(checkAfterStart);
           }
         }, 200);
@@ -377,9 +378,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
         if (currentUtteranceRef.current === utterance) {
           setIsSpeaking(false);
           currentUtteranceRef.current = null;
-          console.log("✅ Speech ended (onend event fired) - This confirms speech actually played!");
-          console.log("✅ If you heard the speech, TTS is working correctly!");
-          console.log("✅ If you did NOT hear the speech, check system/browser volume settings");
         }
       };
 
@@ -396,11 +394,10 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
           setIsSpeaking(false);
           currentUtteranceRef.current = null;
           // "canceled"는 정상적인 중단이므로 무시
+          // "interrupted"는 사용자나 시스템에 의해 중단된 경우 (정상)
           // "not-allowed"는 브라우저 정책상 자동 재생이 차단된 경우
-          if (event.error !== "canceled" && event.error !== "not-allowed") {
+          if (event.error !== "canceled" && event.error !== "interrupted" && event.error !== "not-allowed") {
             console.error("❌ Speech error:", event.error, event);
-          } else if (event.error === "not-allowed") {
-            console.log("🔇 Speech blocked by browser policy (auto-play not allowed)");
           }
         }
       };
@@ -409,13 +406,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
       try {
         // Chrome/Edge에서 속성 설정 후 바로 호출하면 작동하지 않을 수 있음
         await new Promise((resolve) => setTimeout(resolve, 50));
-
-        console.log("🎯 Calling speechSynthesis.speak()");
-        console.log("📊 SpeechSynthesis state:", {
-          speaking: window.speechSynthesis.speaking,
-          pending: window.speechSynthesis.pending,
-          paused: window.speechSynthesis.paused,
-        });
 
         // speak() 호출 전에 이전 utterance 정리
         if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
@@ -428,7 +418,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
         // speak() 호출 직후 상태 확인 및 필요시 resume
         setTimeout(() => {
           if (window.speechSynthesis.paused) {
-            console.log("🔄 Speech is paused, trying to resume...");
             try {
               window.speechSynthesis.resume();
             } catch (e) {
@@ -440,18 +429,11 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
         // speak() 호출 후 즉시 상태 확인
         setTimeout(() => {
           const isActive = window.speechSynthesis.speaking || window.speechSynthesis.pending;
-          console.log("📊 After speak() call:", {
-            speaking: window.speechSynthesis.speaking,
-            pending: window.speechSynthesis.pending,
-            isActive,
-          });
 
           if (!isActive && currentUtteranceRef.current === utterance) {
             console.warn("⚠️ Speech did not enter active state immediately");
           } else if (isActive) {
             // speaking이 true인데 onstart가 아직 발생하지 않았다면 경고
-            console.log("⏳ Speaking state is true, waiting for onstart event...");
-
             // onstart가 500ms 내에 발생하지 않으면 상태 확인 로직이 대신 처리하도록 함
             // (statusCheckInterval이 consecutiveActiveChecks를 통해 처리)
             setTimeout(() => {
@@ -465,14 +447,7 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
                   window.speechSynthesis.cancel();
                   setTimeout(() => {
                     window.speechSynthesis.speak(utterance);
-                    console.log("🔄 Immediate retry: speak() called again");
                   }, 100);
-                } else {
-                  // speaking은 true인데 onstart가 발생하지 않음 - 상태 확인 로직이 처리함
-                  console.log("⏳ onstart event not fired, but speech appears active");
-                  console.log("⏳ Status check interval will handle this case");
-                  console.log("💡 This is a known browser bug where onstart doesn't fire");
-                  console.log("💡 The speech might still be playing - check your volume!");
                 }
               }
             }, 500);
@@ -493,14 +468,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
             // 900ms 이상 active 상태이면 (3번 * 300ms) 재생 중으로 간주
             if (consecutiveActiveChecks >= 3 && !hasDetectedStart) {
               console.warn("⚠️ onstart event did not fire, but speech appears to be active");
-              console.log("✅ Assuming speech started (workaround for browser bug)");
-              console.log("🔊 If you cannot hear the speech, please check:");
-              console.log("   1. System volume is not muted");
-              console.log("   2. Browser tab is not muted (check tab icon)");
-              console.log("   3. macOS System Settings > Sound > Output device");
-              console.log(
-                "   4. Try a shorter test: console.log('Test'); new SpeechSynthesisUtterance('테스트').onstart=()=>console.log('Playing'); window.speechSynthesis.speak(new SpeechSynthesisUtterance('테스트'));"
-              );
               setIsSpeaking(true);
               hasDetectedStart = true;
 
@@ -512,9 +479,8 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
             } else if (hasDetectedStart) {
               // 이미 재생 중으로 감지됨 - onend 이벤트가 발생하는지 추적
               if (consecutiveActiveChecks % 10 === 0) {
-                // 3초마다 상태 로그 (너무 많이 출력하지 않기 위해)
+                // 3초마다 상태 확인 (너무 많이 출력하지 않기 위해)
                 const duration = (consecutiveActiveChecks * 300) / 1000;
-                console.log(`⏳ Still speaking... (${duration.toFixed(1)}s elapsed)`);
 
                 // 30초 이상 재생 중이면 이상한 상황 (보통 그렇게 오래 걸리지 않음)
                 if (duration > 30) {
@@ -533,7 +499,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
               if (currentUtterance === utterance) {
                 currentUtteranceRef.current = null;
               }
-              console.log("✅ Speech stopped (detected via status check)");
               hasDetectedStart = false;
 
               if (statusCheckInterval) {
@@ -566,12 +531,10 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
 
                   retryUtterance.onstart = () => {
                     setIsSpeaking(true);
-                    console.log("✅ Speech started on retry");
                   };
                   retryUtterance.onend = () => {
                     setIsSpeaking(false);
                     currentUtteranceRef.current = null;
-                    console.log("✅ Speech ended on retry");
                   };
                   retryUtterance.onerror = (e) => {
                     setIsSpeaking(false);
@@ -583,7 +546,6 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
                   // 재시도도 지연 후 호출
                   setTimeout(() => {
                     window.speechSynthesis.speak(retryUtterance);
-                    console.log("🔄 Retry speak() called");
                   }, 100);
                 } catch (retryError) {
                   console.error("❌ Retry failed:", retryError);
@@ -637,36 +599,52 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
         onEmergencyDetected(response.risk_level);
       }
 
-      // 자동 음성 출력
-      handleSpeak(response.message);
-    } catch (error) {
+      // TTS는 useEffect에서 자동으로 처리됩니다
+    } catch (error: unknown) {
       console.error("채팅 오류:", error);
 
       let errorMessage: ChatMessage;
 
-      // 네트워크 에러 확인
-      if (error instanceof Error) {
-        if (error.message.includes("Network Error") || error.message.includes("ERR_NETWORK")) {
-          errorMessage = {
-            role: "assistant",
-            content:
-              "⚠️ 서버에 연결할 수 없습니다.\n\n" +
-              "해결 방법:\n" +
-              "1. 새 터미널을 열고\n" +
-              "2. cd /Users/dowonkim/Desktop/code/school/agent\n" +
-              "3. uv run python main.py\n\n" +
-              "FastAPI 서버가 실행 중이면 다시 시도해주세요.",
-          };
-        } else {
-          errorMessage = {
-            role: "assistant",
-            content: `오류가 발생했습니다: ${error.message}\n다시 시도해주세요.`,
-          };
-        }
+      // axios 에러 확인
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const axiosError = error as any;
+
+      // API 인터셉터에서 설정한 네트워크 에러 메시지 확인
+      if (axiosError?.isNetworkError && axiosError?.userMessage) {
+        errorMessage = {
+          role: "assistant",
+          content: `⚠️ 서버 연결 오류\n\n${axiosError.userMessage}`,
+        };
+      } else if (axiosError?.response?.data) {
+        // 서버에서 반환한 에러 메시지
+        const serverError = axiosError.response.data;
+        errorMessage = {
+          role: "assistant",
+          content: `서버 오류가 발생했습니다: ${
+            serverError.detail || serverError.message || "알 수 없는 오류"
+          }\n\n다시 시도해주세요.`,
+        };
+      } else if (axiosError?.code === "ERR_NETWORK" || axiosError?.message?.includes("Network Error")) {
+        // 네트워크 에러 (인터셉터를 거치지 않은 경우)
+        errorMessage = {
+          role: "assistant",
+          content:
+            "⚠️ 서버에 연결할 수 없습니다.\n\n" +
+            "해결 방법:\n" +
+            "1. 새 터미널을 열고\n" +
+            "2. cd agent\n" +
+            "3. uv run python main.py\n\n" +
+            "FastAPI 서버가 실행 중인지 확인하세요.",
+        };
+      } else if (error instanceof Error) {
+        errorMessage = {
+          role: "assistant",
+          content: `오류가 발생했습니다: ${error.message}\n\n다시 시도해주세요.`,
+        };
       } else {
         errorMessage = {
           role: "assistant",
-          content: "죄송합니다. 오류가 발생했습니다. 다시 시도해주세요.",
+          content: "죄송합니다. 예상치 못한 오류가 발생했습니다.\n\n다시 시도해주세요.",
         };
       }
 
@@ -790,7 +768,24 @@ const ChatBot = ({ userId, onEmergencyDetected, onboardingData }: ChatBotProps) 
                   message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
                 )}
               >
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                <p className="whitespace-pre-wrap">
+                  {message.content.split(/(https?:\/\/[^\s]+)/g).map((part, idx) => {
+                    if (part.match(/^https?:\/\//)) {
+                      return (
+                        <a
+                          key={idx}
+                          href={part}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 underline break-all"
+                        >
+                          {part}
+                        </a>
+                      );
+                    }
+                    return <span key={idx}>{part}</span>;
+                  })}
+                </p>
               </div>
               {message.role === "assistant" && (
                 <Button
